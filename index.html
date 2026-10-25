@@ -11,6 +11,7 @@
   html,body { margin:0; height:100%; }
   body.ctrl { background:var(--bg); color:var(--txt); font:16px/1.4 system-ui,sans-serif; padding:16px; }
   body.ov { background:transparent !important; overflow:hidden; }
+  body.ov.test { background:#2b2b2b !important; }
   .wrap { max-width:560px; margin:0 auto; }
   h1 { font-size:20px; margin:4px 0 14px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:14px; }
@@ -19,23 +20,27 @@
   .row { display:flex; gap:8px; margin-top:8px; }
   button { padding:12px 14px; border:0; border-radius:10px; background:var(--acc); color:#fff; font-size:15px; font-weight:600; cursor:pointer; }
   button.sec { background:#2a2f3a; }
-  button:active { transform:scale(.97); }
+  button:active:not(:disabled) { transform:scale(.97); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
   .grow { flex:1; }
   #mute { width:100%; font-size:18px; padding:16px; background:#2a2f3a; }
   #mute.on { background:var(--bad); }
   input[type=range] { width:100%; height:36px; accent-color:var(--acc); }
+  input[type=range]:disabled { opacity:.45; }
   .vol { display:flex; justify-content:space-between; align-items:center; font-weight:600; }
   .status { font-size:13px; color:var(--mut); margin-top:8px; }
+  .warn { color:#ffb454; }
   .dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:#555; margin-right:6px; }
   .dot.ok { background:#3ddc84; }
   .preview { display:flex; align-items:center; gap:10px; margin-top:10px; color:var(--mut); font-size:13px; }
-  .preview .ico { width:44px; height:44px; background:#000; border-radius:10px; display:flex; align-items:center; justify-content:center; }
+  .preview .ico { width:44px; height:44px; background:#000; border-radius:10px; display:flex; align-items:center; justify-content:center; flex:none; }
   .ico svg { width:30px; height:30px; fill:#fff; }
   /* overlay */
   #overlay { display:none; position:fixed; inset:0; align-items:center; justify-content:center; }
   body.ov #overlay { display:flex; }
   #overlay svg { width:var(--size,100%); height:var(--size,100%); max-width:100%; max-height:100%; fill:#fff; filter:drop-shadow(0 2px 6px rgba(0,0,0,.6)); }
   #frame { position:fixed; left:0; top:0; width:8px; height:8px; opacity:0; pointer-events:none; border:0; }
+  #badge { position:fixed; left:6px; bottom:6px; font:11px/1.3 system-ui,sans-serif; color:#ccc; background:rgba(0,0,0,.6); padding:3px 6px; border-radius:4px; max-width:95%; }
   .hide { display:none !important; }
 </style>
 </head>
@@ -44,9 +49,10 @@
 <!-- ===== OVERLAY (transparent, audio only) ===== -->
 <div id="overlay">
   <svg id="icoOn" viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
-  <svg id="icoOff" class="hide" viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/><path d="M3.3 2.3 2 3.6 20.4 22l1.3-1.3z" stroke="#fff" stroke-width="0"/><path d="M2.3 3.6 3.6 2.3 21.7 20.4 20.4 21.7z" fill="#ff4d6d"/></svg>
+  <svg id="icoOff" class="hide" viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/><path d="M2.3 3.6 3.6 2.3 21.7 20.4 20.4 21.7z" fill="#ff4d6d"/></svg>
 </div>
 <iframe id="frame" allow="autoplay;fullscreen" class="hide"></iframe>
+<div id="badge" class="hide"></div>
 
 <!-- ===== CONTROLLER ===== -->
 <div class="wrap hide" id="ctrl">
@@ -56,6 +62,7 @@
     <label>1. Paste your VDO.Ninja screen-share link</label>
     <input type="text" id="src" placeholder="https://vdo.ninja/?view=yourStreamID" autocomplete="off">
     <div class="row"><button class="grow" id="gen">Generate overlay link</button></div>
+    <div class="status warn" id="notice"></div>
   </div>
 
   <div class="card">
@@ -65,13 +72,18 @@
       <button class="grow" id="copy">Copy link</button>
       <button class="sec" id="open">Test</button>
     </div>
-    <div class="status"><span class="dot" id="dot"></span><span id="st">Waiting for overlay to connect…</span></div>
+    <div class="row">
+      <button class="sec grow" id="copyCtrl">Copy controller link (for another device)</button>
+    </div>
+    <div class="status">Room ID (treat it like a password): <span id="roomInfo"></span></div>
   </div>
 
   <div class="card">
-    <div class="vol"><span>Volume</span><span id="pct">100%</span></div>
-    <input type="range" id="vol" min="0" max="100" value="100">
-    <button id="mute">🔊 Mute</button>
+    <div class="vol"><span>Volume</span><span id="pct">—</span></div>
+    <input type="range" id="vol" min="0" max="100" value="100" disabled>
+    <button id="mute" disabled>🔊 Mute</button>
+    <div class="status"><span class="dot" id="dot"></span><span id="st">Connecting to overlay…</span></div>
+    <div class="row"><button class="sec grow hide" id="retry">Retry now</button></div>
     <div class="preview">
       <div class="ico" id="pv"></div>
       <span>Overlay icon preview (shows 🚫 at 0% or muted). Shortcut: press <b>M</b> to mute.</span>
@@ -81,137 +93,633 @@
 
 <script>
 (function () {
-  var q = new URLSearchParams(location.search);
-  var room = q.get('r');
-  var src = q.get('src');
-  var isOverlay = !!(room && src);
-  var state = { vol: 100, mute: false };
-  var KEY = 'vdoAudioState';
-  var PEER_PREFIX = 'vdoaudio-';
+'use strict';
 
-  function $(id){ return document.getElementById(id); }
-  function silent(s){ return s.mute || s.vol <= 0; }
+/* =====================================================================
+   0. CONFIG
+   Architecture: the OVERLAY is the single PeerJS room host (id
+   "vdoaudio-<room>") and the ONLY owner of authoritative state
+   {vol, mute, rev}. Controllers each get their own unique PeerJS id,
+   connect to the overlay, and send commands. Overlay applies commands in
+   arrival order (last command wins), bumps `rev`, and broadcasts the
+   resulting state to every connected controller.
+   ===================================================================== */
+var HOST_PREFIX = 'vdoaudio-';
+var CTRL_PREFIX = 'vdoaudio-c-';
+// Signaling config. Defaults to PeerJS's free public cloud broker.
+// To use your own: { debug:0, host:'peer.example.com', port:443, path:'/', secure:true,
+//                    config:{ iceServers:[ {urls:'stun:...'}, {urls:'turn:...',username:'..',credential:'..'} ] } }
+var PEER_OPTIONS = { debug: 0 };
+var OPEN_TIMEOUT_MS = 15000;     // max wait for a Peer to reach the signaling server
+var CONNECT_TIMEOUT_MS = 8000;   // max wait for a controller<->overlay data channel
+var HEARTBEAT_MS = 8000;         // controller ping interval
+var STALE_MS = 25000;            // silence after which either side declares the link dead
+var MAX_CONTROLLERS = 10;
+var MAX_CMDS_PER_SEC = 60;
+var VOL_SEND_GAP_MS = 60;        // slider command throttle
+// localStorage = LOCAL preferences only (never shared state):
+var LS_ROOM = 'vdoAudioRoom';            // which room this browser controls
+var LS_SRC = 'vdoAudioSrc';              // last pasted source link
+var LS_OVERLAY_STATE = 'vdoAudioState';  // overlay's own last volume/mute (initial value after restart)
+var ROOM_RE = /^[a-z0-9]{6,32}$/;
+var FRAME_FLAGS = ['cleanoutput', 'autostart', 'novideo', 'transparent', 'noheader'];
 
-  /* ---------- OVERLAY MODE ---------- */
-  if (isOverlay) {
-    document.body.className = 'ov';
-    var size = q.get('size'); if (size) document.documentElement.style.setProperty('--size', size + 'px');
-    try { var saved = JSON.parse(localStorage.getItem(KEY + room)); if (saved) state = saved; } catch(e){}
+/* =====================================================================
+   1. SHARED HELPERS / VALIDATION
+   ===================================================================== */
+function $(id) { return document.getElementById(id); }
+function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+function hasOwn(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+function isRoom(s) { return typeof s === 'string' && ROOM_RE.test(s); }
+function isUInt(n) { return typeof n === 'number' && isFinite(n) && Math.floor(n) === n && n >= 0 && n <= 9007199254740991; }
+function cleanVol(v) {               // returns integer 0..100 or null (rejects, never clamps)
+  if (typeof v !== 'number' || !isFinite(v) || v < 0 || v > 100) return null;
+  return Math.round(v);
+}
+function parseHttps(s) {             // https-only, no embedded credentials
+  if (typeof s !== 'string' || s.length > 2048) return null;
+  try {
+    var u = new URL(s);
+    if (u.protocol !== 'https:' || u.username || u.password) return null;
+    return u;
+  } catch (e) { return null; }
+}
+function randId(n) {
+  var chars = 'abcdefghijklmnopqrstuvwxyz0123456789', out = '', a = null, i;
+  try { a = new Uint8Array(n); crypto.getRandomValues(a); } catch (e) { a = null; }
+  for (i = 0; i < n; i++) out += chars.charAt((a ? a[i] : Math.floor(Math.random() * 256)) % 36);
+  return out;
+}
+function makeBackoff(c) {            // bounded exponential backoff with jitter; next() === null when exhausted
+  var base = c.base || 1000, cap = c.cap || 30000, max = c.maxTries || 10, n = 0;
+  return {
+    next: function () {
+      if (n >= max) return null;
+      var d = Math.min(cap, base * Math.pow(2, n)); n++;
+      return Math.round(d * (0.75 + Math.random() * 0.5));
+    },
+    reset: function () { n = 0; }
+  };
+}
+function buildFrameUrl(u, vol) {
+  var parts = [];
+  u.searchParams.forEach(function (v, k) {
+    if (FRAME_FLAGS.indexOf(k) !== -1 || k === 'volume') return;
+    parts.push(v === '' ? encodeURIComponent(k) : encodeURIComponent(k) + '=' + encodeURIComponent(v));
+  });
+  FRAME_FLAGS.forEach(function (f) { parts.push(f); });
+  parts.push('volume=' + vol);
+  return u.origin + u.pathname + '?' + parts.join('&') + u.hash;
+}
 
-    // Build the hidden vdo.ninja viewer (audio only)
-    var frame = $('frame'); frame.classList.remove('hide');
+/* =====================================================================
+   2. PeerManager — owns exactly ONE Peer instance at a time.
+   - `gen` counter: events from any superseded Peer are ignored.
+   - single pending retry timer; bounded backoff; open-timeout guard.
+   - 'open' may fire several times (after peer.reconnect()) -> callers
+     must be idempotent in onOpen.
+   ===================================================================== */
+function PeerManager(o) {
+  var peer = null, gen = 0, retryTimer = null, guardTimer = null, slowTimer = null;
+  var stopped = true, failed = false;
+  var bo = makeBackoff(o.backoff || {});
+
+  function status(k, d, w) { try { if (o.onStatus) o.onStatus(k, d, w); } catch (e) { console.error(e); } }
+  function clearTimers() {
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+    if (guardTimer) { clearTimeout(guardTimer); guardTimer = null; }
+    if (slowTimer) { clearTimeout(slowTimer); slowTimer = null; }
+  }
+  function teardown(skipDestroy) {
+    clearTimers();
+    var p = peer; peer = null; gen++;           // gen++ first: destroy() events are ignored
+    if (!p) return;
+    try { if (o.onTeardown) o.onTeardown(); } catch (e) { console.error(e); }
+    if (!skipDestroy) { try { p.destroy(); } catch (e) {} }
+  }
+  function armGuard(g) {
+    if (guardTimer) clearTimeout(guardTimer);
+    guardTimer = setTimeout(function () {
+      guardTimer = null;
+      if (g !== gen || stopped) return;
+      teardown(false);
+      schedule('create', 'signaling timeout');
+    }, OPEN_TIMEOUT_MS);
+  }
+  function reconnectNow() {
+    try { armGuard(gen); peer.reconnect(); } catch (e) { create(); }
+  }
+  function schedule(kind, reason) {
+    if (stopped || retryTimer || slowTimer || failed) return;   // never stack timers
+    var d = bo.next();
+    if (d === null) {
+      failed = true; status('failed', reason);
+      if (o.slowRetryMs) {          // unattended mode (overlay): one slow attempt per interval
+        slowTimer = setTimeout(function () {
+          slowTimer = null; if (stopped) return;
+          failed = false; bo.reset(); create();
+        }, o.slowRetryMs);
+      }
+      return;
+    }
+    status('retrying', reason, d);
+    retryTimer = setTimeout(function () {
+      retryTimer = null; if (stopped) return;
+      if (kind === 'reconnect' && peer && peer.disconnected && !peer.destroyed) reconnectNow();
+      else create();
+    }, d);
+  }
+  function recover(p, g, reason, dead) {
+    if (stopped || g !== gen || p !== peer) return;
+    if (retryTimer || slowTimer || failed) return;
+    if (dead) { teardown(true); schedule('create', reason); }
+    else if (p.disconnected) schedule('reconnect', reason);
+  }
+  function create() {
+    if (stopped) return;
+    teardown(false);                 // guarantees a single instance
+    failed = false;
+    var g = gen, p, closed = false;
     try {
-      var u = new URL(src);
-      ['cleanoutput','autostart','novideo','transparent','noheader'].forEach(function(p){ u.searchParams.set(p,''); });
-      u.searchParams.set('volume', String(Math.round(state.vol)));
-      frame.src = u.toString().replace(/=(&|$)/g, '$1');
-    } catch(e) { frame.src = src; }
+      var id = (typeof o.id === 'function') ? o.id() : o.id;
+      p = new Peer(id, Object.assign({}, PEER_OPTIONS));
+    } catch (e) { console.error(e); schedule('create', 'init error'); return; }
+    peer = p;
+    status('connecting');
+    armGuard(g);
+    p.on('open', function () {
+      if (g !== gen) return;
+      if (guardTimer) { clearTimeout(guardTimer); guardTimer = null; }
+      bo.reset(); failed = false;
+      status('open');
+      try { o.onOpen(p); } catch (e) { console.error(e); }
+    });
+    p.on('connection', function (c) {
+      if (g !== gen) return;
+      try { if (o.onConnection) o.onConnection(c); } catch (e) { console.error(e); }
+    });
+    p.on('disconnected', function () { recover(p, g, 'signaling disconnected', closed || p.destroyed); });
+    p.on('close', function () { closed = true; recover(p, g, 'peer closed', true); });
+    p.on('error', function (err) {
+      if (g !== gen) return;
+      var type = err && err.type;
+      if (type === 'peer-unavailable') { try { if (o.onPeerError) o.onPeerError(err); } catch (e) {} return; }
+      status('error', type);
+      recover(p, g, type || 'error', closed || p.destroyed);
+    });
+  }
+  function retry() {                 // manual / "back online" nudge; no-op if healthy
+    if (stopped) return;
+    if (peer && !peer.disconnected && !peer.destroyed && !failed) return;
+    bo.reset(); failed = false; clearTimers();
+    if (peer && peer.disconnected && !peer.destroyed) reconnectNow(); else create();
+  }
+  function onOnline() { retry(); }
+  return {
+    start: function () {
+      if (!stopped) return;
+      stopped = false; bo.reset(); failed = false;
+      window.addEventListener('online', onOnline);
+      create();
+    },
+    stop: function () {
+      if (stopped) return;
+      stopped = true;
+      window.removeEventListener('online', onOnline);
+      teardown(false);
+    },
+    retry: retry
+  };
+}
 
-    function send(msg){ try { frame.contentWindow.postMessage(msg, '*'); } catch(e){} }
-    function apply() {
-      var off = silent(state);
-      $('icoOn').classList.toggle('hide', off);
-      $('icoOff').classList.toggle('hide', !off);
-      send({ volume: state.vol / 100 });
-      send({ mute: !!state.mute });
-      try { localStorage.setItem(KEY + room, JSON.stringify(state)); } catch(e){}
-    }
-    frame.addEventListener('load', apply);
-    setInterval(apply, 3000);   // re-assert after the stream connects/reconnects
-    apply();
+/* =====================================================================
+   3. OVERLAY MODE — sole room host + authoritative state owner
+   ===================================================================== */
+function startOverlay(room, srcUrl, test) {
+  document.body.className = 'ov' + (test ? ' test' : '');
+  var sz = parseInt(new URLSearchParams(location.search).get('size'), 10);
+  if (sz >= 16 && sz <= 2000) document.documentElement.style.setProperty('--size', sz + 'px');
 
-    // Listen for controller commands
-    function connect() {
-      var peer = new Peer();
-      peer.on('open', function () {
-        var c = peer.connect(PEER_PREFIX + room, { reliable: true });
-        c.on('data', function (d) {
-          if (d && typeof d.vol === 'number') { state = { vol: d.vol, mute: !!d.mute }; apply(); }
-        });
-        c.on('close', function(){ try{peer.destroy();}catch(e){} setTimeout(connect, 2000); });
-        c.on('error', function(){ try{peer.destroy();}catch(e){} setTimeout(connect, 2000); });
-        // if controller isn't up yet, retry
-        setTimeout(function(){ if (!c.open) { try{peer.destroy();}catch(e){} connect(); } }, 6000);
-      });
-      peer.on('error', function(){ try{peer.destroy();}catch(e){} setTimeout(connect, 3000); });
-    }
-    connect();
-    return;
+  var stopped = false;
+  var epoch = randId(10);            // identifies this overlay session; controllers reset rev tracking if it changes
+  var rev = 0;                       // monotonic; +1 on every accepted command
+  var state = loadState();
+  var ctrls = new Map();             // peerId -> entry
+  var hostStatus = 'starting';
+
+  function loadState() {
+    var s = { vol: 100, mute: false };
+    try {
+      var j = JSON.parse(lsGet(LS_OVERLAY_STATE + room));
+      if (j && typeof j === 'object') {
+        var v = cleanVol(j.vol); if (v !== null) s.vol = v;
+        if (typeof j.mute === 'boolean') s.mute = j.mute;
+      }
+    } catch (e) {}
+    return s;
+  }
+  function persist() { lsSet(LS_OVERLAY_STATE + room, JSON.stringify(state)); }
+  function silent() { return state.mute || state.vol <= 0; }
+  function renderIcon() {
+    var off = silent();
+    $('icoOn').classList.toggle('hide', off);
+    $('icoOff').classList.toggle('hide', !off);
   }
 
-  /* ---------- CONTROLLER MODE ---------- */
+  // ----- hidden VDO.Ninja audio-only viewer -----
+  var frame = $('frame');
+  frame.classList.remove('hide');
+  function pushToFrame() {
+    try {
+      frame.contentWindow.postMessage({ volume: state.vol / 100 }, '*');
+      frame.contentWindow.postMessage({ mute: !!state.mute }, '*');
+    } catch (e) {}
+  }
+  frame.addEventListener('load', pushToFrame);
+  frame.src = buildFrameUrl(srcUrl, state.vol);
+
+  // ----- badge (only visible with &test=1) -----
+  function countOpen() { var n = 0; ctrls.forEach(function (e) { if (e.open) n++; }); return n; }
+  function updateBadge() {
+    if (!test) return;
+    var b = $('badge'); b.classList.remove('hide');
+    var t;
+    if (hostStatus === 'open') t = 'Hosting room · ' + countOpen() + ' controller(s) · ' + state.vol + '%' + (state.mute ? ' · MUTED' : '');
+    else if (hostStatus === 'unavailable-id') t = 'Room already hosted by another overlay (close the other tab/source) — retrying';
+    else if (hostStatus === 'failed') t = 'Signaling unreachable — slow retry every 60 s';
+    else t = 'Connecting to signaling server… (' + hostStatus + ')';
+    b.textContent = t;
+  }
+
+  // ----- state fan-out -----
+  function safeSend(e, m) { try { if (e.conn.open) { e.conn.send(m); return true; } } catch (err) {} return false; }
+  function sendState(e) {
+    safeSend(e, { t: 'state', epoch: epoch, rev: rev, vol: state.vol, mute: state.mute, n: countOpen(), ack: e.lastSeq });
+  }
+  function broadcast() { ctrls.forEach(function (e) { if (e.open) sendState(e); }); }
+  function commit() {                // single place that mutates authoritative revision
+    rev++;
+    renderIcon(); pushToFrame(); persist(); updateBadge(); broadcast();
+  }
+
+  // ----- controller connections -----
+  function drop(id, entry) {
+    if (ctrls.get(id) !== entry) return;     // makes duplicate close/error events harmless
+    ctrls.delete(id);
+    if (entry.timer) { clearTimeout(entry.timer); entry.timer = null; }
+    try { entry.conn.close(); } catch (e) {}
+    updateBadge(); broadcast();
+  }
+  function handle(e, d) {
+    if (!d || typeof d !== 'object' || typeof d.t !== 'string') return;
+    var now = Date.now();
+    e.lastSeen = now;
+    if (d.t === 'ping') { safeSend(e, { t: 'pong' }); return; }
+    if (d.t !== 'cmd') return;
+    if (now - e.winStart >= 1000) { e.winStart = now; e.winCount = 0; }
+    if (++e.winCount > MAX_CMDS_PER_SEC) return;
+    if (!isUInt(d.seq) || d.seq <= e.lastSeq) return;           // stale / duplicate / reordered
+    var hasVol = hasOwn(d, 'vol'), hasMute = hasOwn(d, 'mute');
+    if (!hasVol && !hasMute) return;
+    var v = null;
+    if (hasVol) { v = cleanVol(d.vol); if (v === null) return; }
+    if (hasMute && typeof d.mute !== 'boolean') return;
+    // all fields validated -> apply atomically (last command wins, by arrival order)
+    e.lastSeq = d.seq;
+    if (hasVol) state.vol = v;
+    if (hasMute) state.mute = d.mute;
+    commit();
+  }
+  function onConn(conn) {
+    if (stopped || !conn || typeof conn.peer !== 'string' || conn.peer.length > 128) {
+      try { if (conn) conn.close(); } catch (e) {}
+      return;
+    }
+    var id = conn.peer, old = ctrls.get(id);
+    if (old) drop(id, old);                                  // duplicate connection from same peer: newest wins
+    if (ctrls.size >= MAX_CONTROLLERS) { try { conn.close(); } catch (e) {} return; }
+    var e = { conn: conn, open: false, lastSeq: 0, lastSeen: Date.now(), winStart: 0, winCount: 0, timer: null };
+    ctrls.set(id, e);
+    e.timer = setTimeout(function () { e.timer = null; if (!e.open) drop(id, e); }, CONNECT_TIMEOUT_MS);
+    function onOpen() {
+      if (ctrls.get(id) !== e || e.open) return;
+      e.open = true; e.lastSeen = Date.now();
+      if (e.timer) { clearTimeout(e.timer); e.timer = null; }
+      updateBadge();
+      broadcast();                                           // new controller gets full state immediately; others get new count
+    }
+    conn.on('open', onOpen);
+    conn.on('data', function (d) {
+      if (ctrls.get(id) !== e) return;
+      try { handle(e, d); } catch (err) { console.error(err); }
+    });
+    conn.on('close', function () { drop(id, e); });
+    conn.on('error', function () { drop(id, e); });
+    if (conn.open) onOpen();
+  }
+
+  // ----- host peer -----
+  var mgr = PeerManager({
+    id: function () { return HOST_PREFIX + room; },
+    backoff: { base: 1000, cap: 30000, maxTries: 10 },
+    slowRetryMs: 60000,
+    onOpen: function () { hostStatus = 'open'; updateBadge(); },
+    onConnection: onConn,
+    onTeardown: function () {
+      ctrls.forEach(function (e) { if (e.timer) clearTimeout(e.timer); });
+      ctrls.clear(); updateBadge();
+    },
+    onStatus: function (k, d) {
+      if (k === 'open') hostStatus = 'open';
+      else if (k === 'failed') hostStatus = 'failed';
+      else if (k === 'retrying' || k === 'error') hostStatus = (d === 'unavailable-id') ? 'unavailable-id' : String(d || k);
+      else hostStatus = k;
+      updateBadge();
+    }
+  });
+
+  // one maintenance interval: evict silent controllers + re-assert state to the iframe
+  var tick = setInterval(function () {
+    var now = Date.now(), dead = [];
+    ctrls.forEach(function (e, id) { if (now - e.lastSeen > STALE_MS) dead.push([id, e]); });
+    dead.forEach(function (x) { drop(x[0], x[1]); });
+    pushToFrame();
+  }, 3000);
+
+  renderIcon(); updateBadge();
+  mgr.start();
+
+  return {
+    stop: function () {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(tick);
+      mgr.stop();                                            // destroys peer -> frees the room id immediately
+    }
+  };
+}
+
+/* =====================================================================
+   4. CONTROLLER MODE — unique PeerJS id, connects to the overlay
+   ===================================================================== */
+function startController(room, srcStr, notice) {
   document.body.className = 'ctrl';
   $('ctrl').classList.remove('hide');
   $('overlay').style.display = 'none';
-
-  var myRoom = localStorage.getItem('vdoAudioRoom');
-  if (!myRoom) { myRoom = Math.random().toString(36).slice(2, 10); localStorage.setItem('vdoAudioRoom', myRoom); }
-  var savedSrc = localStorage.getItem('vdoAudioSrc'); if (savedSrc) $('src').value = savedSrc;
-  var conns = [];
+  $('src').value = srcStr || '';
+  $('roomInfo').textContent = room;
+  $('notice').textContent = notice || '';
 
   var ON  = '<svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>';
   var OFF = '<svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/><path d="M2.3 3.6 3.6 2.3 21.7 20.4 20.4 21.7z" fill="#ff4d6d"/></svg>';
 
-  function render() {
-    $('pct').textContent = state.vol + '%';
-    $('vol').value = state.vol;
-    $('mute').className = state.mute ? 'on' : '';
-    $('mute').textContent = state.mute ? '🔇 Muted — press to unmute' : '🔊 Mute';
-    $('pv').innerHTML = silent(state) ? OFF : ON;
-  }
-  function broadcast() {
-    conns = conns.filter(function(c){ return c.open; });
-    conns.forEach(function(c){ c.send(state); });
-    $('dot').className = 'dot' + (conns.length ? ' ok' : '');
-    $('st').textContent = conns.length ? 'Overlay connected (' + conns.length + ')' : 'Waiting for overlay to connect…';
-  }
-  function set(patch) { Object.assign(state, patch); render(); broadcast(); }
+  var stopped = false;
+  var ui = { vol: 100, mute: false };                       // what the user sees (optimistic)
+  var auth = { epoch: null, rev: -1, n: 0 };               // last authoritative info from the overlay
+  var link = 'connecting';       // connecting | connected | unreachable | gaveup
+  var sig = 'connecting';        // signaling: connecting | ok | retrying | failed
+  var peer = null, conn = null;
+  var connTimer = null, hbTimer = null, retryT = null, volTimer = null;
+  var lastRx = 0, seq = 0, queuedVol = null;
+  var connBo = makeBackoff({ base: 1000, cap: 15000, maxTries: 20 });
 
-  $('vol').addEventListener('input', function(e){ set({ vol: +e.target.value }); });
-  $('mute').addEventListener('click', function(){ set({ mute: !state.mute }); });
-  document.addEventListener('keydown', function(e){
-    if (e.key.toLowerCase() === 'm' && document.activeElement.tagName !== 'INPUT') set({ mute: !state.mute });
+  // ---------- rendering ----------
+  function render() {
+    var ok = link === 'connected';
+    $('vol').disabled = !ok; $('mute').disabled = !ok;
+    $('vol').value = ui.vol;
+    $('pct').textContent = ok ? ui.vol + '%' : '—';
+    $('mute').className = ui.mute ? 'on' : '';
+    $('mute').textContent = ui.mute ? '🔇 Muted — press to unmute' : '🔊 Mute';
+    $('pv').innerHTML = (ui.mute || ui.vol <= 0) ? OFF : ON;
+    var t, showRetry = false;
+    if (ok) t = 'Overlay connected · ' + auth.n + ' controller' + (auth.n === 1 ? '' : 's');
+    else if (sig === 'failed') { t = 'Signaling server unreachable. Check your connection, then press Retry.'; showRetry = true; }
+    else if (sig === 'retrying') t = 'Signaling server unreachable — reconnecting…';
+    else if (link === 'gaveup') { t = 'Overlay not reachable. Make sure its link is loaded in OBS/IRL Pro, then press Retry.'; showRetry = true; }
+    else if (link === 'unreachable') t = 'Overlay not reachable — retrying…';
+    else t = 'Connecting to overlay…';
+    $('st').textContent = t;
+    $('dot').className = 'dot' + (ok ? ' ok' : '');
+    $('retry').classList.toggle('hide', !showRetry);
+  }
+
+  // ---------- connection lifecycle ----------
+  function dropConn() {
+    if (connTimer) { clearTimeout(connTimer); connTimer = null; }
+    if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }
+    if (volTimer) { clearTimeout(volTimer); volTimer = null; }
+    queuedVol = null; seq = 0;
+    auth = { epoch: null, rev: -1, n: 0 };
+    var c = conn; conn = null;                              // null first: late events from c are ignored
+    if (c) { try { c.close(); } catch (e) {} }
+    if (link === 'connected') link = 'connecting';
+  }
+  function scheduleRetry() {
+    if (stopped || retryT) return;
+    var d = connBo.next();
+    if (d === null) { link = 'gaveup'; render(); return; }
+    link = 'unreachable'; render();
+    retryT = setTimeout(function () { retryT = null; connect(); }, d);
+  }
+  function failConn() { if (stopped) return; dropConn(); scheduleRetry(); }
+  function connect() {              // idempotent: safe to call from onOpen (which can fire repeatedly) and timers
+    if (stopped || conn) return;
+    if (!peer || peer.destroyed || peer.disconnected || !peer.open) return;   // onOpen will call us again
+    var c = null;
+    try { c = peer.connect(HOST_PREFIX + room, { reliable: true, serialization: 'json' }); } catch (e) { c = null; }
+    if (!c) { scheduleRetry(); return; }
+    conn = c; seq = 0;
+    if (link !== 'connected') link = 'connecting';
+    render();
+    connTimer = setTimeout(function () { connTimer = null; if (conn === c) failConn(); }, CONNECT_TIMEOUT_MS);
+    c.on('open', function () {
+      if (conn !== c) return;
+      if (connTimer) { clearTimeout(connTimer); connTimer = null; }
+      lastRx = Date.now();
+      if (hbTimer) clearInterval(hbTimer);
+      hbTimer = setInterval(function () {
+        if (conn !== c) return;
+        if (Date.now() - lastRx > STALE_MS) { failConn(); return; }
+        try { c.send({ t: 'ping' }); } catch (e) { failConn(); }
+      }, HEARTBEAT_MS);
+    });
+    c.on('data', function (d) {
+      if (conn !== c) return;
+      lastRx = Date.now();
+      try { onMsg(d); } catch (e) { console.error(e); }
+    });
+    c.on('close', function () { if (conn === c) failConn(); });
+    c.on('error', function () { if (conn === c) failConn(); });
+  }
+
+  // ---------- incoming (validated) ----------
+  function onMsg(d) {
+    if (!d || typeof d !== 'object' || d.t !== 'state') return;       // pong etc: only lastRx matters
+    var vol = cleanVol(d.vol);
+    if (vol === null || typeof d.mute !== 'boolean') return;
+    if (typeof d.epoch !== 'string' || d.epoch.length === 0 || d.epoch.length > 32) return;
+    if (!isUInt(d.rev) || !isUInt(d.n) || d.n > 1000 || !isUInt(d.ack)) return;
+    if (auth.epoch !== d.epoch) { auth.epoch = d.epoch; auth.rev = -1; }   // overlay restarted -> new authority
+    if (d.rev < auth.rev) return;                                          // stale -> never overwrite newer state
+    auth.rev = d.rev; auth.n = d.n;
+    if (link !== 'connected') {                                            // first state on this connection
+      link = 'connected'; connBo.reset();
+      ui.vol = vol; ui.mute = d.mute;
+    } else if (d.ack >= seq && queuedVol === null) {                       // none of OUR commands still in flight
+      ui.vol = vol; ui.mute = d.mute;
+    }
+    render();
+  }
+
+  // ---------- outgoing ----------
+  function sendCmd(fields) {
+    if (!conn || !conn.open || link !== 'connected') return false;
+    var m = { t: 'cmd', seq: seq + 1 };
+    if (hasOwn(fields, 'vol')) m.vol = fields.vol;
+    if (hasOwn(fields, 'mute')) m.mute = fields.mute;
+    try { conn.send(m); } catch (e) { failConn(); return false; }
+    seq++;
+    return true;
+  }
+  function flushVol() {
+    volTimer = null;
+    if (queuedVol === null) return;
+    var v = queuedVol; queuedVol = null;
+    if (sendCmd({ vol: v })) volTimer = setTimeout(flushVol, VOL_SEND_GAP_MS);   // trailing value goes out after the gap
+  }
+  function setVol(v) { ui.vol = v; render(); queuedVol = v; if (!volTimer) flushVol(); }
+  function toggleMute() { if (link !== 'connected') return; ui.mute = !ui.mute; render(); sendCmd({ mute: ui.mute }); }
+
+  // ---------- peer ----------
+  var mgr = PeerManager({
+    id: function () { return CTRL_PREFIX + room + '-' + randId(10); },   // unique per controller instance
+    backoff: { base: 1000, cap: 30000, maxTries: 10 },
+    slowRetryMs: 0,                                                       // controller stops and offers Retry
+    onOpen: function (p) { peer = p; connect(); },
+    onPeerError: function () { if (conn && !conn.open) failConn(); },     // overlay id not registered (not loaded yet)
+    onTeardown: function () {
+      peer = null; dropConn();
+      if (!stopped) { link = 'connecting'; render(); }
+    },
+    onStatus: function (k) {
+      if (k === 'open') sig = 'ok';
+      else if (k === 'retrying') sig = 'retrying';
+      else if (k === 'failed') sig = 'failed';
+      else if (k === 'connecting') sig = 'connecting';
+      else return;
+      if (!stopped) render();
+    }
   });
 
+  function manualRetry() {
+    if (stopped) return;
+    connBo.reset();
+    if (retryT) { clearTimeout(retryT); retryT = null; }
+    if (!conn) link = 'connecting';
+    render();
+    mgr.retry();
+    connect();
+  }
+  function onWake() { if (document.visibilityState !== 'hidden' && (link === 'gaveup' || sig === 'failed')) manualRetry(); }
+
+  // ---------- UI wiring (each handler bound exactly once) ----------
+  function pageBase() { return location.href.split('#')[0].split('?')[0]; }
   function overlayLink() {
     var s = $('src').value.trim();
-    if (!/^https?:\/\//i.test(s)) return '';
-    localStorage.setItem('vdoAudioSrc', s);
-    var base = location.origin + location.pathname;
-    return base + '?r=' + myRoom + '&src=' + encodeURIComponent(s);
+    if (!parseHttps(s)) return '';
+    lsSet(LS_SRC, s);
+    return pageBase() + '?r=' + room + '&src=' + encodeURIComponent(s);
   }
-  $('gen').addEventListener('click', function(){
+  function controllerLink() {
+    var s = $('src').value.trim();
+    return pageBase() + '?r=' + room + '&ctrl=1' + (parseHttps(s) ? '&src=' + encodeURIComponent(s) : '');
+  }
+  function copyText(text, btn, label) {
+    function done() { btn.textContent = 'Copied ✓'; setTimeout(function () { btn.textContent = label; }, 1500); }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback);
+    else fallback();
+    function fallback() {
+      var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
+      ta.select(); try { document.execCommand('copy'); done(); } catch (e) {} document.body.removeChild(ta);
+    }
+  }
+  $('gen').onclick = function () {
     var l = overlayLink();
-    $('out').value = l || '';
-    if (!l) alert('Paste a full VDO.Ninja link starting with https://');
-  });
-  $('copy').addEventListener('click', function(){
-    if (!$('out').value) $('gen').click();
-    if (!$('out').value) return;
-    navigator.clipboard.writeText($('out').value).then(function(){
-      $('copy').textContent = 'Copied ✓'; setTimeout(function(){ $('copy').textContent = 'Copy link'; }, 1500);
-    }, function(){ $('out').select(); document.execCommand('copy'); });
-  });
-  $('open').addEventListener('click', function(){ if ($('out').value) window.open($('out').value, '_blank'); });
-
-  // Peer: controller hosts a stable ID; overlays connect to it
-  function host() {
-    var peer = new Peer(PEER_PREFIX + myRoom);
-    peer.on('connection', function (c) {
-      c.on('open', function(){ conns.push(c); c.send(state); broadcast(); });
-      c.on('close', broadcast);
-    });
-    peer.on('error', function (err) {
-      if (err.type === 'unavailable-id') {
-        $('st').textContent = 'This controller is already open in another tab/device — close it first.';
-      } else { setTimeout(host, 3000); }
-    });
-    peer.on('disconnected', function(){ try { peer.reconnect(); } catch(e){} });
+    $('out').value = l;
+    $('notice').textContent = l ? '' : 'Paste a full https:// VDO.Ninja link first.';
+  };
+  $('copy').onclick = function () {
+    if (!$('out').value) $('gen').onclick();
+    if ($('out').value) copyText($('out').value, $('copy'), 'Copy link');
+  };
+  $('copyCtrl').onclick = function () { copyText(controllerLink(), $('copyCtrl'), 'Copy controller link (for another device)'); };
+  $('open').onclick = function () {
+    if (!$('out').value) $('gen').onclick();
+    if ($('out').value) window.open($('out').value + '&test=1', '_blank');
+  };
+  $('vol').oninput = function (e) { setVol(+e.target.value); };
+  $('mute').onclick = toggleMute;
+  $('retry').onclick = manualRetry;
+  function onKey(e) {
+    if (e.key && e.key.toLowerCase() === 'm' && !e.ctrlKey && !e.metaKey && !e.altKey &&
+        document.activeElement && document.activeElement.tagName !== 'INPUT') toggleMute();
   }
-  host();
+  document.addEventListener('keydown', onKey);
+  document.addEventListener('visibilitychange', onWake);
+  window.addEventListener('online', onWake);
+
   render();
+  mgr.start();
+
+  return {
+    stop: function () {
+      if (stopped) return;
+      stopped = true;
+      if (retryT) { clearTimeout(retryT); retryT = null; }
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('visibilitychange', onWake);
+      window.removeEventListener('online', onWake);
+      dropConn();
+      mgr.stop();
+    }
+  };
+}
+
+/* =====================================================================
+   5. BOOT — decide mode once, initialise once
+   Overlay link:    ?r=<room>&src=<vdo link>            (&test=1, &size=px)
+   Controller link: ?r=<room>&ctrl=1[&src=<vdo link>]   (for other devices)
+   ===================================================================== */
+function newRoom() { return randId(12); }
+
+(function boot() {
+  var q = new URLSearchParams(location.search);
+  var r = (q.get('r') || '').toLowerCase();
+  var s = q.get('src');
+  var rOk = isRoom(r), sUrl = s ? parseHttps(s) : null;
+  var forceCtrl = q.get('ctrl') === '1';
+  var app;
+
+  if (rOk && sUrl && !forceCtrl) {
+    app = startOverlay(r, sUrl, q.get('test') === '1');
+  } else {
+    var notice = '';
+    if ((q.has('r') && !rOk) || (s && !sUrl)) notice = 'The link had an invalid room or source, so that part was ignored.';
+    var room = rOk ? r : (lsGet(LS_ROOM) || '').toLowerCase();
+    if (!isRoom(room)) room = newRoom();
+    lsSet(LS_ROOM, room);
+    var src = sUrl ? s : (lsGet(LS_SRC) || '');
+    if (!parseHttps(src)) src = '';
+    app = startController(room, src, notice);
+  }
+  function cleanup() { try { app.stop(); } catch (e) {} }
+  window.addEventListener('pagehide', cleanup);
+  window.addEventListener('beforeunload', cleanup);
+})();
+
 })();
 </script>
 </body>
 </html>
-
