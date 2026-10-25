@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VDO.Ninja Audio Overlay</title>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --line:#2a2f3a; --txt:#e8eaf0; --mut:#8b92a3; --acc:#7c5cff; --bad:#ff4d6d; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; }
+  body.ctrl { background:var(--bg); color:var(--txt); font:16px/1.4 system-ui,sans-serif; padding:16px; }
+  body.ov { background:transparent !important; overflow:hidden; }
+  .wrap { max-width:560px; margin:0 auto; }
+  h1 { font-size:20px; margin:4px 0 14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:14px; }
+  label { display:block; font-size:13px; color:var(--mut); margin-bottom:6px; }
+  input[type=text] { width:100%; padding:12px; border-radius:10px; border:1px solid var(--line); background:#0f1115; color:var(--txt); font-size:15px; }
+  .row { display:flex; gap:8px; margin-top:8px; }
+  button { padding:12px 14px; border:0; border-radius:10px; background:var(--acc); color:#fff; font-size:15px; font-weight:600; cursor:pointer; }
+  button.sec { background:#2a2f3a; }
+  button:active { transform:scale(.97); }
+  .grow { flex:1; }
+  #mute { width:100%; font-size:18px; padding:16px; background:#2a2f3a; }
+  #mute.on { background:var(--bad); }
+  input[type=range] { width:100%; height:36px; accent-color:var(--acc); }
+  .vol { display:flex; justify-content:space-between; align-items:center; font-weight:600; }
+  .status { font-size:13px; color:var(--mut); margin-top:8px; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:#555; margin-right:6px; }
+  .dot.ok { background:#3ddc84; }
+  .preview { display:flex; align-items:center; gap:10px; margin-top:10px; color:var(--mut); font-size:13px; }
+  .preview .ico { width:44px; height:44px; background:#000; border-radius:10px; display:flex; align-items:center; justify-content:center; }
+  .ico svg { width:30px; height:30px; fill:#fff; }
+  /* overlay */
+  #overlay { display:none; position:fixed; inset:0; align-items:center; justify-content:center; }
+  body.ov #overlay { display:flex; }
+  #overlay svg { width:var(--size,100%); height:var(--size,100%); max-width:100%; max-height:100%; fill:#fff; filter:drop-shadow(0 2px 6px rgba(0,0,0,.6)); }
+  #frame { position:fixed; left:0; top:0; width:8px; height:8px; opacity:0; pointer-events:none; border:0; }
+  .hide { display:none !important; }
+</style>
+</head>
+<body>
+
+<!-- ===== OVERLAY (transparent, audio only) ===== -->
+<div id="overlay">
+  <svg id="icoOn" viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
+  <svg id="icoOff" class="hide" viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/><path d="M3.3 2.3 2 3.6 20.4 22l1.3-1.3z" stroke="#fff" stroke-width="0"/><path d="M2.3 3.6 3.6 2.3 21.7 20.4 20.4 21.7z" fill="#ff4d6d"/></svg>
+</div>
+<iframe id="frame" allow="autoplay;fullscreen" class="hide"></iframe>
+
+<!-- ===== CONTROLLER ===== -->
+<div class="wrap hide" id="ctrl">
+  <h1>🎵 VDO.Ninja Audio Overlay</h1>
+
+  <div class="card">
+    <label>1. Paste your VDO.Ninja screen-share link</label>
+    <input type="text" id="src" placeholder="https://vdo.ninja/?view=yourStreamID" autocomplete="off">
+    <div class="row"><button class="grow" id="gen">Generate overlay link</button></div>
+  </div>
+
+  <div class="card">
+    <label>2. Copy this into OBS / IRL Pro as a Browser Source</label>
+    <input type="text" id="out" readonly placeholder="Overlay link appears here">
+    <div class="row">
+      <button class="grow" id="copy">Copy link</button>
+      <button class="sec" id="open">Test</button>
+    </div>
+    <div class="status"><span class="dot" id="dot"></span><span id="st">Waiting for overlay to connect…</span></div>
+  </div>
+
+  <div class="card">
+    <div class="vol"><span>Volume</span><span id="pct">100%</span></div>
+    <input type="range" id="vol" min="0" max="100" value="100">
+    <button id="mute">🔊 Mute</button>
+    <div class="preview">
+      <div class="ico" id="pv"></div>
+      <span>Overlay icon preview (shows 🚫 at 0% or muted). Shortcut: press <b>M</b> to mute.</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var room = q.get('r');
+  var src = q.get('src');
+  var isOverlay = !!(room && src);
+  var state = { vol: 100, mute: false };
+  var KEY = 'vdoAudioState';
+  var PEER_PREFIX = 'vdoaudio-';
+
+  function $(id){ return document.getElementById(id); }
+  function silent(s){ return s.mute || s.vol <= 0; }
+
+  /* ---------- OVERLAY MODE ---------- */
+  if (isOverlay) {
+    document.body.className = 'ov';
+    var size = q.get('size'); if (size) document.documentElement.style.setProperty('--size', size + 'px');
+    try { var saved = JSON.parse(localStorage.getItem(KEY + room)); if (saved) state = saved; } catch(e){}
+
+    // Build the hidden vdo.ninja viewer (audio only)
+    var frame = $('frame'); frame.classList.remove('hide');
+    try {
+      var u = new URL(src);
+      ['cleanoutput','autostart','novideo','transparent','noheader'].forEach(function(p){ u.searchParams.set(p,''); });
+      u.searchParams.set('volume', String(Math.round(state.vol)));
+      frame.src = u.toString().replace(/=(&|$)/g, '$1');
+    } catch(e) { frame.src = src; }
+
+    function send(msg){ try { frame.contentWindow.postMessage(msg, '*'); } catch(e){} }
+    function apply() {
+      var off = silent(state);
+      $('icoOn').classList.toggle('hide', off);
+      $('icoOff').classList.toggle('hide', !off);
+      send({ volume: state.vol / 100 });
+      send({ mute: !!state.mute });
+      try { localStorage.setItem(KEY + room, JSON.stringify(state)); } catch(e){}
+    }
+    frame.addEventListener('load', apply);
+    setInterval(apply, 3000);   // re-assert after the stream connects/reconnects
+    apply();
+
+    // Listen for controller commands
+    function connect() {
+      var peer = new Peer();
+      peer.on('open', function () {
+        var c = peer.connect(PEER_PREFIX + room, { reliable: true });
+        c.on('data', function (d) {
+          if (d && typeof d.vol === 'number') { state = { vol: d.vol, mute: !!d.mute }; apply(); }
+        });
+        c.on('close', function(){ try{peer.destroy();}catch(e){} setTimeout(connect, 2000); });
+        c.on('error', function(){ try{peer.destroy();}catch(e){} setTimeout(connect, 2000); });
+        // if controller isn't up yet, retry
+        setTimeout(function(){ if (!c.open) { try{peer.destroy();}catch(e){} connect(); } }, 6000);
+      });
+      peer.on('error', function(){ try{peer.destroy();}catch(e){} setTimeout(connect, 3000); });
+    }
+    connect();
+    return;
+  }
+
+  /* ---------- CONTROLLER MODE ---------- */
+  document.body.className = 'ctrl';
+  $('ctrl').classList.remove('hide');
+  $('overlay').style.display = 'none';
+
+  var myRoom = localStorage.getItem('vdoAudioRoom');
+  if (!myRoom) { myRoom = Math.random().toString(36).slice(2, 10); localStorage.setItem('vdoAudioRoom', myRoom); }
+  var savedSrc = localStorage.getItem('vdoAudioSrc'); if (savedSrc) $('src').value = savedSrc;
+  var conns = [];
+
+  var ON  = '<svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>';
+  var OFF = '<svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/><path d="M2.3 3.6 3.6 2.3 21.7 20.4 20.4 21.7z" fill="#ff4d6d"/></svg>';
+
+  function render() {
+    $('pct').textContent = state.vol + '%';
+    $('vol').value = state.vol;
+    $('mute').className = state.mute ? 'on' : '';
+    $('mute').textContent = state.mute ? '🔇 Muted — press to unmute' : '🔊 Mute';
+    $('pv').innerHTML = silent(state) ? OFF : ON;
+  }
+  function broadcast() {
+    conns = conns.filter(function(c){ return c.open; });
+    conns.forEach(function(c){ c.send(state); });
+    $('dot').className = 'dot' + (conns.length ? ' ok' : '');
+    $('st').textContent = conns.length ? 'Overlay connected (' + conns.length + ')' : 'Waiting for overlay to connect…';
+  }
+  function set(patch) { Object.assign(state, patch); render(); broadcast(); }
+
+  $('vol').addEventListener('input', function(e){ set({ vol: +e.target.value }); });
+  $('mute').addEventListener('click', function(){ set({ mute: !state.mute }); });
+  document.addEventListener('keydown', function(e){
+    if (e.key.toLowerCase() === 'm' && document.activeElement.tagName !== 'INPUT') set({ mute: !state.mute });
+  });
+
+  function overlayLink() {
+    var s = $('src').value.trim();
+    if (!/^https?:\/\//i.test(s)) return '';
+    localStorage.setItem('vdoAudioSrc', s);
+    var base = location.origin + location.pathname;
+    return base + '?r=' + myRoom + '&src=' + encodeURIComponent(s);
+  }
+  $('gen').addEventListener('click', function(){
+    var l = overlayLink();
+    $('out').value = l || '';
+    if (!l) alert('Paste a full VDO.Ninja link starting with https://');
+  });
+  $('copy').addEventListener('click', function(){
+    if (!$('out').value) $('gen').click();
+    if (!$('out').value) return;
+    navigator.clipboard.writeText($('out').value).then(function(){
+      $('copy').textContent = 'Copied ✓'; setTimeout(function(){ $('copy').textContent = 'Copy link'; }, 1500);
+    }, function(){ $('out').select(); document.execCommand('copy'); });
+  });
+  $('open').addEventListener('click', function(){ if ($('out').value) window.open($('out').value, '_blank'); });
+
+  // Peer: controller hosts a stable ID; overlays connect to it
+  function host() {
+    var peer = new Peer(PEER_PREFIX + myRoom);
+    peer.on('connection', function (c) {
+      c.on('open', function(){ conns.push(c); c.send(state); broadcast(); });
+      c.on('close', broadcast);
+    });
+    peer.on('error', function (err) {
+      if (err.type === 'unavailable-id') {
+        $('st').textContent = 'This controller is already open in another tab/device — close it first.';
+      } else { setTimeout(host, 3000); }
+    });
+    peer.on('disconnected', function(){ try { peer.reconnect(); } catch(e){} });
+  }
+  host();
+  render();
+})();
+</script>
+</body>
+</html>
